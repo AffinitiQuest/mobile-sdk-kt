@@ -107,7 +107,7 @@ class TransportBlePeripheralServerReader(
                 gattServer.sendTransportSpecificTermination()
                 gattServer.stop()
 
-                callback?.update(mapOf(Pair("mdl", data)))
+                callback?.update(mapOf(Pair("dpl", data)))
             }
 
             override fun onTransportSpecificSessionTermination() {

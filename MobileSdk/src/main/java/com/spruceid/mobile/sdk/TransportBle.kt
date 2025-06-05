@@ -11,6 +11,7 @@ import java.util.*
 class TransportBle(private var bluetoothManager: BluetoothManager) {
 
     private lateinit var transportBleCentralClientHolder: TransportBleCentralClientHolder
+    private lateinit var transportBleCentralClientReader: TransportBleCentralClientReader
     private lateinit var transportBlePeripheralServerHolder: TransportBlePeripheralServerHolder
     private lateinit var transportBlePeripheralServerReader: TransportBlePeripheralServerReader
 
@@ -38,6 +39,24 @@ class TransportBle(private var bluetoothManager: BluetoothManager) {
     ) {
 
         /**
+         * Transport Central Client Reader
+         */
+        if (deviceRetrievalOption == "Central" && application == "Reader") {
+            Log.d("TransportBle.initialize", "-- Selecting Transport Central Client Reader --")
+            //if (updateRequestData != null) {
+                transportBleCentralClientReader = TransportBleCentralClientReader(
+                    application,
+                    bluetoothManager,
+                    serviceUUID,
+                    //updateRequestData,
+                    context,
+                    callback
+                )
+                transportBleCentralClientReader.connect(ident, encodedEDeviceKeyBytes)
+            //}
+        }
+
+        /**
          * Transport Central Client Holder
          */
         if (deviceRetrievalOption == "Central" && application == "Holder") {
@@ -47,7 +66,7 @@ class TransportBle(private var bluetoothManager: BluetoothManager) {
                     application,
                     bluetoothManager,
                     serviceUUID,
-                    updateRequestData,
+                    //updateRequestData,
                     context,
                     callback,
                 )

@@ -149,13 +149,13 @@ class GattClient(
                         return
                     }
 
-                    if (characteristicIdentUuid != null) {
-                        characteristicIdent = service.getCharacteristic(characteristicIdentUuid)
-                        if (characteristicIdent == null) {
-                            reportError("Ident characteristic not found.")
-                            return
-                        }
-                    }
+//                    if (characteristicIdentUuid != null) {
+//                        characteristicIdent = service.getCharacteristic(characteristicIdentUuid)
+//                        if (characteristicIdent == null) {
+//                            reportError("Ident characteristic not found.")
+//                            return
+//                        }
+//                    }
 
                     callback.onState(BleStates.ServicesDiscovered.string)
                     reportLog("Discovered expected services")
@@ -395,7 +395,7 @@ class GattClient(
                     }
 
                     incomingMessage.write(value, 1, value.size - 1)
-
+                    //Thread.sleep(500)
                     reportLog(
                         "Received chunk with ${value.size} bytes (last=${value[0].toInt() == 0x00}), " +
                                 "incomingMessage.length=${incomingMessage.toByteArray().size}"

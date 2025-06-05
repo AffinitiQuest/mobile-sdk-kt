@@ -23,7 +23,7 @@ class IsoMdlReader(
 
     init {
         try {
-            val sessionData = establishSession(uri, requestedItems, trustAnchorRegistry)
+            val sessionData = establishSession(uri, "int.icao.epl.1", requestedItems, trustAnchorRegistry)
 
             session = sessionData.state
             bleManager = Transport(platformBluetooth)
@@ -31,7 +31,7 @@ class IsoMdlReader(
                 "Reader",
                 UUID.fromString(sessionData.uuid),
                 "BLE",
-                "Peripheral",
+                "Central",
                 sessionData.bleIdent,
                 null,
                 context,

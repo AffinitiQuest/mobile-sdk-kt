@@ -12,13 +12,13 @@ import java.util.*
  * The role of central is to scan for a peripheral and connect. AKA holder.
  * 18013-5 section 8.3.3.1.1.4 Table 11.
  */
-class TransportBleCentralClientHolder(
+class TransportBleCentralClientReader(
     private var application: String,
     private var bluetoothManager: BluetoothManager,
     private var serviceUUID: UUID,
     //private var updateRequestData: (data: ByteArray) -> Unit,
     private var context: Context,
-    private var callback: BLESessionStateDelegate?,
+    private var callback: BLESessionStateDelegate?
 ) {
     private var bluetoothAdapter: BluetoothAdapter? = null
 
@@ -38,11 +38,18 @@ class TransportBleCentralClientHolder(
     private var characteristicL2CAPUuid: UUID =
         UUID.fromString("0000000b-a123-48ce-896b-4c76973373e6")
 
-
+    private var holderCharacteristicStateUuid: UUID =
+        UUID.fromString("00000001-A123-48CE-896B-4C76973373E6")
+    private var holderCharacteristicClient2ServerUuid: UUID =
+        UUID.fromString("00000002-A123-48CE-896B-4C76973373E6")
+    private var holderCharacteristicServer2ClientUuid: UUID =
+        UUID.fromString("00000003-A123-48CE-896B-4C76973373E6")
+    private var holderCharacteristicL2CapUuid: UUID =
+        UUID.fromString("0000000A-A123-48CE-896B-4C76973373E6")
     /**
      * Sets up central with GATT client mode.
      */
-    fun connect(ident: ByteArray) {
+    fun connect(ident: ByteArray, encodedEDeviceKeyBytes: ByteArray) {
         /**
          * Should be generated based on the 18013-5 section 8.3.3.1.1.3.
          */
@@ -75,10 +82,12 @@ class TransportBleCentralClientHolder(
         val gattClientCallback: GattClientCallback = object : GattClientCallback() {
             override fun onPeerConnected() {
                 Log.d(
-                    "TransportBleCentralClientHolder.gattClientCallback.onPeerConnected",
+                    "TransportBleCentralClientReader.gattClientCallback.onPeerConnected",
                     "Peer Connected"
                 )
                 callback?.update(mapOf(Pair("connected", "")))
+                //gattClient.sendMessage(byteArrayOf(0x01.toByte()))
+                gattClient.sendMessage(encodedEDeviceKeyBytes)
             }
 
             override fun onPeerDisconnected() {
@@ -118,7 +127,7 @@ class TransportBleCentralClientHolder(
                 )
 
                 try {
-                    //updateRequestData(data)
+                    callback?.update(mapOf(Pair("dpl", data)))
                 } catch (e: Error) {
                     Log.e("MDoc", e.toString())
                     callback?.update(mapOf(Pair("error", e)))
@@ -166,11 +175,11 @@ class TransportBleCentralClientHolder(
             context,
             bluetoothAdapter,
             serviceUUID,
-            characteristicStateUuid,
-            characteristicClient2ServerUuid,
-            characteristicServer2ClientUuid,
+            holderCharacteristicStateUuid,
+            holderCharacteristicClient2ServerUuid,
+            holderCharacteristicServer2ClientUuid,
             characteristicIdentUuid,
-            characteristicL2CAPUuid
+            holderCharacteristicL2CapUuid
         )
 
         bleCentral = BleCentral(bleCentralCallback, serviceUUID, bluetoothAdapter!!)
