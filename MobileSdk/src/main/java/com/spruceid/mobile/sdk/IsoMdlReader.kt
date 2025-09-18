@@ -13,6 +13,8 @@ import java.util.UUID
 class IsoMdlReader(
     val callback: BLESessionStateDelegate,
     uri: String,
+    docType: String,
+    format: String,
     requestedItems: Map<String, Map<String, Boolean>>,
     trustAnchorRegistry: List<String>?,
     platformBluetooth: BluetoothManager,
@@ -23,7 +25,7 @@ class IsoMdlReader(
 
     init {
         try {
-            val sessionData = establishSession(uri, "int.icao.epl.1", requestedItems, trustAnchorRegistry)
+            val sessionData = establishSession(uri, docType, format, requestedItems, trustAnchorRegistry)
 
             session = sessionData.state
             bleManager = Transport(platformBluetooth)
@@ -44,7 +46,7 @@ class IsoMdlReader(
         }
     }
 
-    fun handleResponse(response: ByteArray): Map<String, Map<String, MDocItem>> {
+    suspend fun handleResponse(response: ByteArray): Map<String, Map<String, MDocItem>> {
         try {
             val responseData = com.spruceid.mobile.sdk.rs.handleResponse(session, response)
             return responseData.verifiedResponse
@@ -53,7 +55,7 @@ class IsoMdlReader(
         }
     }
 
-    fun handleMdlReaderResponseData(response: ByteArray): MdlReaderResponseData {
+    suspend fun handleMdlReaderResponseData(response: ByteArray): MdlReaderResponseData {
         try {
             return com.spruceid.mobile.sdk.rs.handleResponse(session, response)
         } catch (e: MdlReaderResponseException) {

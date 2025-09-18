@@ -55,7 +55,9 @@ import com.spruceid.mobilesdkexample.utils.checkAndRequestBluetoothPermissions
 import com.spruceid.mobilesdkexample.utils.getCurrentSqlDate
 import com.spruceid.mobilesdkexample.viewmodels.TrustedCertificatesViewModel
 import com.spruceid.mobilesdkexample.viewmodels.VerificationActivityLogsViewModel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 val defaultElements: Map<String, Map<String, Boolean>> =
     mapOf(
@@ -209,14 +211,19 @@ fun VerifyMDocView(
     val bleCallback: BLESessionStateDelegate = object : BLESessionStateDelegate() {
         override fun update(state: Map<String, Any>) {
             if (state.containsKey("mdl")) {
-                val response = reader?.handleMdlReaderResponseData(state["mdl"] as ByteArray)
-                if (response != null) {
-                    result = response.verifiedResponse
-                    issuerAuthenticationStatus = response.issuerAuthentication
-                    deviceAuthenticationStatus = response.deviceAuthentication
-                    responseProcessingErrors = response.errors
+                runBlocking {
+                    async {
+                        val response =
+                            reader?.handleMdlReaderResponseData(state["mdl"] as ByteArray)
+                        if (response != null) {
+                            result = response.verifiedResponse
+                            issuerAuthenticationStatus = response.issuerAuthentication
+                            deviceAuthenticationStatus = response.deviceAuthentication
+                            responseProcessingErrors = response.errors
+                        }
+                        scanProcessState = State.DONE
+                    }.await()
                 }
-                scanProcessState = State.DONE
             }
         }
 
@@ -246,6 +253,8 @@ fun VerifyMDocView(
                 reader = IsoMdlReader(
                     bleCallback,
                     content,
+                    "int.icao.epl.1",
+                    "mdoc",
                     if (checkAgeOver18) {
                         ageOver18Elements
                     } else {

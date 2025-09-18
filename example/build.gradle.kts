@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.spruceid.mobilesdkexample"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.spruceid.mobilesdkexample"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 32
         versionName = "1.7.3"
 
