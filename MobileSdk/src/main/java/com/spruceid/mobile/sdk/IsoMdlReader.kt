@@ -48,16 +48,16 @@ class IsoMdlReader(
 
     suspend fun handleResponse(response: ByteArray): Map<String, Map<String, MDocItem>> {
         try {
-            val responseData = com.spruceid.mobile.sdk.rs.handleResponse(session, response)
+            val responseData = com.spruceid.mobile.sdk.rs.handleResponse(session, response, emptyMap(), true)
             return responseData.verifiedResponse
         } catch (e: MdlReaderResponseException) {
             throw e
         }
     }
 
-    suspend fun handleMdlReaderResponseData(response: ByteArray): MdlReaderResponseData {
+    suspend fun handleMdlReaderResponseData(response: ByteArray, dids: Map<String, String>, resolveDids: Boolean): MdlReaderResponseData {
         try {
-            return com.spruceid.mobile.sdk.rs.handleResponse(session, response)
+            return com.spruceid.mobile.sdk.rs.handleResponse(session, response, dids, resolveDids)
         } catch (e: MdlReaderResponseException) {
             throw e
         }
