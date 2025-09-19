@@ -214,7 +214,7 @@ fun VerifyMDocView(
                 runBlocking {
                     async {
                         val response =
-                            reader?.handleMdlReaderResponseData(state["mdl"] as ByteArray)
+                            reader?.handleMdlReaderResponseData(state["mdl"] as ByteArray, emptyMap(), true)
                         if (response != null) {
                             result = response.verifiedResponse
                             issuerAuthenticationStatus = response.issuerAuthentication
