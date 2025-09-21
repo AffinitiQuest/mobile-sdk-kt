@@ -7,6 +7,7 @@ import com.spruceid.mobile.sdk.rs.MDocItem
 import com.spruceid.mobile.sdk.rs.MdlReaderResponseData
 import com.spruceid.mobile.sdk.rs.MdlReaderResponseException
 import com.spruceid.mobile.sdk.rs.MdlSessionManager
+import com.spruceid.mobile.sdk.rs.VerificationResponse
 import com.spruceid.mobile.sdk.rs.establishSession
 import java.util.UUID
 
@@ -49,13 +50,17 @@ class IsoMdlReader(
     suspend fun handleResponse(response: ByteArray): Map<String, Map<String, MDocItem>> {
         try {
             val responseData = com.spruceid.mobile.sdk.rs.handleResponse(session, response, emptyMap(), true)
-            return responseData.verifiedResponse
+            if(responseData.responses.size > 0) {
+                return responseData.responses.get(0).verifiedResponse
+            }
+
+            return emptyMap()
         } catch (e: MdlReaderResponseException) {
             throw e
         }
     }
 
-    suspend fun handleMdlReaderResponseData(response: ByteArray, dids: Map<String, String>, resolveDids: Boolean): MdlReaderResponseData {
+    suspend fun handleMdlReaderResponseData(response: ByteArray, dids: Map<String, String>, resolveDids: Boolean): VerificationResponse {
         try {
             return com.spruceid.mobile.sdk.rs.handleResponse(session, response, dids, resolveDids)
         } catch (e: MdlReaderResponseException) {
