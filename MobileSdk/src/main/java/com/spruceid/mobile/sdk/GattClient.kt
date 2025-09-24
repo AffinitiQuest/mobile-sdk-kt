@@ -888,8 +888,8 @@ class GattClient(
     fun disconnect() {
         try {
             if (gattClient != null) {
-                gattClient?.close()
                 gattClient?.disconnect()
+                gattClient?.close()
                 gattClient = null
 
                 callback.onState(BleStates.DisconnectGattClient.string)

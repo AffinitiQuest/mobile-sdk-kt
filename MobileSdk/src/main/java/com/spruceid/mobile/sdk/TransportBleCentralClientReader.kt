@@ -128,6 +128,7 @@ class TransportBleCentralClientReader(
 
                 try {
                     callback?.update(mapOf(Pair("dpl", data)))
+                    gattClient.disconnect()
                 } catch (e: Error) {
                     Log.e("MDoc", e.toString())
                     callback?.update(mapOf(Pair("error", e)))
