@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -6,14 +8,23 @@ plugins {
     id("com.gradleup.nmcp")
 }
 
+val mavenProperties = Properties()
+val mavenPropertiesFile = File(rootDir, "maven.properties")
+
+if (mavenPropertiesFile.exists()) {
+    mavenPropertiesFile.inputStream().use { input ->
+        mavenProperties.load(input)
+    }
+}
+
 publishing {
     repositories {
         maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/spruceid/mobile-sdk-kt")
+            name = "affinitiquest-dev"
+            url = uri("https://pkgs.dev.azure.com/affinitiquest/AffinitiQuest/_packaging/affinitiquest-dev/maven/v1")
             credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                password = System.getenv("GITHUB_TOKEN")
+                username = mavenProperties.getProperty("maven.username")
+                password = mavenProperties.getProperty("maven.password")
             }
         }
         mavenLocal()
@@ -29,9 +40,9 @@ publishing {
 
         // Creates a Maven publication called "release".
         create<MavenPublication>("release") {
-            groupId = "com.spruceid.mobile.sdk"
+            groupId = "com.spruceid.aq.mobile.sdk"
             artifactId = "mobilesdk"
-            version = System.getenv("VERSION")
+            version = mavenProperties.getProperty("maven.version")
 
             afterEvaluate { from(components["release"]) }
 
@@ -39,7 +50,7 @@ publishing {
                 packaging = "aar"
                 name.set("mobilesdk")
                 description.set("Android SpruceID Mobile SDK")
-                url.set("https://github.com/spruceid/mobile-sdk-kt")
+                url.set("https://github.com/affinitiquest/mobile-sdk-kt")
                 licenses {
                     license {
                         name.set("MIT License")
@@ -126,7 +137,7 @@ android {
 
 dependencies {
     //implementation(project(":MobileSdkRs"))
-    api("com.spruceid.mobile.sdk.rs:mobilesdkrs:0.9.0")
+    api("com.spruceid.aq.mobile.sdk.rs:mobilesdkrs:0.9.4")
     //noinspection GradleCompatible
     implementation("com.android.support:appcompat-v7:28.0.0")
     /* Begin UI dependencies */

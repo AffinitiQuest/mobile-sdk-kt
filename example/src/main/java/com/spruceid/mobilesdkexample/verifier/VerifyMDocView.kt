@@ -216,10 +216,10 @@ fun VerifyMDocView(
                         val response =
                             reader?.handleMdlReaderResponseData(state["mdl"] as ByteArray, emptyMap(), true)
                         if (response != null) {
-                            result = response.verifiedResponse
-                            issuerAuthenticationStatus = response.issuerAuthentication
-                            deviceAuthenticationStatus = response.deviceAuthentication
-                            responseProcessingErrors = response.errors
+                            result = response.responses[0].verifiedResponse
+                            issuerAuthenticationStatus = response.responses[0].issuerAuthentication
+                            deviceAuthenticationStatus = response.responses[0].deviceAuthentication
+                            responseProcessingErrors = response.responses[0].errors
                         }
                         scanProcessState = State.DONE
                     }.await()
