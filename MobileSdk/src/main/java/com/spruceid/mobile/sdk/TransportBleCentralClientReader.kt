@@ -161,7 +161,7 @@ class TransportBleCentralClientReader(
          */
         try {
             previousAdapterName = bluetoothAdapter!!.name
-            bluetoothAdapter!!.name = "mDL $application Device"
+            //bluetoothAdapter!!.name = "mDL $application Device"
         } catch (error: SecurityException) {
             Log.e("TransportBleCentralClientHolder.connect", error.toString())
         }
