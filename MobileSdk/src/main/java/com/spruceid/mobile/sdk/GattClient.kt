@@ -91,6 +91,13 @@ class GattClient(
 
                 try {
                     gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        gatt.setPreferredPhy(
+                            BluetoothDevice.PHY_LE_2M_MASK,
+                            BluetoothDevice.PHY_LE_2M_MASK,
+                            BluetoothDevice.PHY_OPTION_NO_PREFERRED
+                        )
+                    }
                     gatt.discoverServices()
                 } catch (error: SecurityException) {
                     callback.onError(error)
@@ -247,11 +254,35 @@ class GattClient(
                     "[GattClient]",
                     "L2CAP read! '${value.size}' ${status == BluetoothGatt.GATT_SUCCESS}"
                 )
-                if (value.size == 2) {
-                    // This doesn't appear to happen in practice; we get the data back in
-                    // onCharacteristicChanged() instead.
-                    dprint("L2CAP channel PSM read via onCharacteristicRead()")
-                    //gatt.readCharacteristic(characteristicL2CAP)
+                if (value.size == 2 && status == BluetoothGatt.GATT_SUCCESS && channelPSM == 0) {
+                    channelPSM = (((value[1].toULong() and 0xFFu) shl 8) or (value[0].toULong() and 0xFFu)).toInt()
+                    reportLog("L2CAP Channel PSM from read: $channelPSM")
+                    val device = gatt.getDevice()
+                    try { btAdapter?.cancelDiscovery() } catch (e: SecurityException) { reportLog("Unable to cancel discovery.") }
+                    val connectThread: Thread = object : Thread() {
+                        override fun run() {
+                            try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    l2capSocket = device.createInsecureL2capChannel(channelPSM)
+                                    l2capSocket?.connect()
+                                    tryIncreaseL2CAPReceiveBuffer()
+                                }
+                            } catch (e: IOException) {
+                                reportError("Error connecting to L2CAP socket: ${e.message}")
+                                useL2CAP = UseL2CAP.No
+                                enableNotification(gatt, characteristicServer2Client, "Server2Client")
+                                return
+                            } catch (e: SecurityException) {
+                                reportError("Not authorized to connect to L2CAP socket.")
+                                return
+                            }
+                            l2capWriteThread = Thread { writeResponse() }
+                            l2capWriteThread!!.start()
+                            callback.onPeerConnected()
+                            readRequest()
+                        }
+                    }
+                    connectThread.start()
                 }
             } else {
                 reportError(
@@ -467,6 +498,7 @@ class GattClient(
                                             l2capSocket =
                                                 device.createInsecureL2capChannel(channelPSM)
                                             l2capSocket?.connect()
+                                            tryIncreaseL2CAPReceiveBuffer()
                                         }
                                     } catch (e: IOException) {
                                         reportError("Error connecting to L2CAP socket: ${e.message}")
@@ -489,8 +521,8 @@ class GattClient(
                                     l2capWriteThread = Thread { writeResponse() }
                                     l2capWriteThread!!.start()
 
-                                    // Let the app know we're connected.
-                                    //reportPeerConnected()
+                                    // Notify transport layer so it sends the SessionEstablishment.
+                                    callback.onPeerConnected()
 
                                     // Reuse this thread for reading
                                     readRequest()
@@ -509,12 +541,48 @@ class GattClient(
     }
 
     /**
+     * Snapshot all currently open file descriptors in this process.
+     * Used to identify the new fd created by createInsecureL2capChannel().
+     */
+    /**
+     * Polls for a new file descriptor created during BluetoothSocket.connect() and
+     * immediately sets BT_RCVMTU=65535 on it. The fd is created at "SocketState: INIT"
+     * before the L2CAP connection request is sent — giving a ~20ms window to set the option.
+     * The thread is interrupted after connect() completes.
+     */
+    /**
+     * Increase the Unix socket receive buffer on the BluetoothSocket's internal LocalSocket.
+     *
+     * BluetoothSocket is backed by a Unix domain socket that the BT daemon uses to push
+     * received L2CAP PDU data to the app. A larger receive buffer lets the BT daemon push
+     * data without blocking, which reduces backpressure on the L2CAP credit grant loop and
+     * improves throughput. The buffer is set on the app side of the IPC socket after connect()
+     * so the internal LocalSocket exists.
+     *
+     * Note: BT_RCVMTU (the L2CAP MPS) lives in the BT daemon process and is not settable
+     * from app code — setsockopt on the Unix socket fails with EOPNOTSUPP. The 4 MB buffer
+     * here only affects the Unix socket, not the L2CAP channel MPS.
+     */
+    private fun tryIncreaseL2CAPReceiveBuffer() {
+        try {
+            val socketField = BluetoothSocket::class.java.getDeclaredField("mSocket")
+            socketField.isAccessible = true
+            val localSocket = socketField.get(l2capSocket) as? android.net.LocalSocket
+            if (localSocket != null) {
+                localSocket.receiveBufferSize = 4 * 1024 * 1024  // 4 MB
+                reportLog("L2CAP Unix socket receive buffer: ${localSocket.receiveBufferSize} bytes")
+            }
+        } catch (e: Exception) {
+            reportLog("tryIncreaseL2CAPReceiveBuffer: ${e.message}")
+        }
+    }
+
+    /**
      * Thread for reading the request via L2CAP.
      */
     private fun readRequest() {
         val payload = ByteArrayOutputStream()
 
-        // Keep listening to the InputStream until an exception occurs.
         val inStream = try {
             l2capSocket!!.inputStream
         } catch (e: IOException) {
@@ -522,46 +590,26 @@ class GattClient(
             return
         }
 
+        var firstByteTime = 0L
+        val startTime = System.currentTimeMillis()
+
         while (true) {
             val buf = ByteArray(L2CAP_BUFFER_SIZE)
             try {
                 val numBytesRead = inStream.read(buf)
+                val now = System.currentTimeMillis()
                 if (numBytesRead == -1) {
-                    reportError("Failure reading request, peer disconnected.")
+                    val accumulated = payload.toByteArray()
+                    if (accumulated.isNotEmpty()) {
+                        reportLog("L2CAP read complete: ${accumulated.size} bytes in ${now - startTime}ms (first byte +${firstByteTime - startTime}ms)")
+                        callback.onMessageReceived(accumulated)
+                    } else {
+                        reportError("Failure reading request, peer disconnected.")
+                    }
                     return
                 }
-                payload.write(buf, 0, buf.count())
-
-                dprint("Currently have ${buf.count()} bytes.")
-
-                // We are receiving this data over a stream socket and do not know how large the
-                // message is; there is no framing information provided, the only way we have to
-                // know whether we have the full message is whether any more data comes in after.
-                // To determine this, we take a timestamp, and schedule an event for half a second
-                // later; if nothing has come in the interim, we assume that to be the full
-                // message.
-                //
-                // Technically, we could also attempt to decode the message (it's CBOR-encoded)
-                // to see if it decodes properly.  Unfortunately, this is potentially subject to
-                // false positives; CBOR has several primitives which have unbounded length. For
-                // messages unsing those primitives, the message length is inferred from the
-                // source data length, so if the (incomplete) message end happened to fall on a
-                // primitive boundary (which is quite likely if a higher MTU isn't negotiated) an
-                // incomplete message could "cleanly" decode.
-
-                requestTimestamp = TimeSource.Monotonic.markNow()
-
-                Executors.newSingleThreadScheduledExecutor()
-                    .schedule({
-                        val curtime = TimeSource.Monotonic.markNow()
-                        if ((curtime - requestTimestamp) > 500.milliseconds) {
-                            val message = payload.toByteArray()
-
-                            reportLog("Request complete: ${message.count()} bytes.")
-                            callback.onMessageReceived(message)
-                        }
-                    }, 500, TimeUnit.MILLISECONDS)
-
+                if (firstByteTime == 0L) firstByteTime = now
+                payload.write(buf, 0, numBytesRead)
             } catch (e: IOException) {
                 reportError("Error on listening input stream from socket L2CAP: ${e}")
                 return
@@ -578,8 +626,7 @@ class GattClient(
             while (true) {
                 var message: ByteArray?
                 try {
-                    message = responseData.poll(500, TimeUnit.MILLISECONDS)
-                    reportLog("????? ${message}")
+                    message = responseData.poll(50, TimeUnit.MILLISECONDS)
                     if (message == null) {
                         continue
                     }
@@ -589,25 +636,14 @@ class GattClient(
                 } catch (e: InterruptedException) {
                     continue
                 }
+                reportLog("Writing ${message.size} bytes via L2CAP")
                 outStream.write(message)
-                break
+                outStream.flush()
+                // Message sent — do not close the socket here. The wallet will send back a
+                // DeviceResponse on this same channel; readRequest() delivers it and owns shutdown.
             }
         } catch (e: IOException) {
             reportError("Error writing response via L2CAP socket: ${e}")
-        }
-
-        try {
-            // Workaround for L2CAP socket behaviour; attempting to close it too quickly can
-            // result in an error return from .close(), and then potentially leave the socket hanging
-            // open indefinitely if not caught.
-            Thread.sleep(1000)
-            l2capSocket!!.close()
-            reportLog("L2CAP socket Closed")
-            disconnect()
-        } catch (e: IOException) {
-            reportError("Error closing socket: ${e}")
-        } catch (e: InterruptedException) {
-            reportError("Error closing socket: ${e}")
         }
     }
 
@@ -704,12 +740,10 @@ class GattClient(
             }
 
             if (useL2CAP == UseL2CAP.Yes) {
-                enableNotification(gatt, characteristicL2CAP, "L2CAP")
-
-                reportLog("Using L2CAP: $useL2CAP")
-
-                //// value is returned async above in onCharacteristicRead()
-
+                // The L2CAP PSM characteristic is read-only — read it to get the PSM value.
+                // Result is delivered asynchronously via onCharacteristicRead().
+                reportLog("Using L2CAP: $useL2CAP — reading PSM characteristic")
+                gatt.readCharacteristic(characteristicL2CAP)
                 return
             }
 
