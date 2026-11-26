@@ -12,6 +12,9 @@ import android.bluetooth.BluetoothSocket
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -24,6 +27,7 @@ import java.util.concurrent.BlockingQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedTransferQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
@@ -73,6 +77,96 @@ class GattClient(
     private val responseData: BlockingQueue<ByteArray> = LinkedTransferQueue()
     private var requestTimestamp = TimeSource.Monotonic.markNow()
 
+    companion object {
+        /**
+         * Connection priority requested on connect, and again when nudging a step-down.
+         * HIGH keeps the fastest resting interval for the (large) DeviceResponse transfer.
+         * CONNECTION_PRIORITY_BALANCED is the validated alternative if HIGH misbehaves on some device.
+         */
+        const val CONNECTION_PRIORITY = BluetoothGatt.CONNECTION_PRIORITY_HIGH
+
+        /** Intervals below this (in 1.25 ms units; 12 = 15 ms) are treated as a central-side boost. */
+        private const val BOOSTED_INTERVAL_THRESHOLD = 12
+
+        /** If no natural step-down has arrived after this long, re-request the priority while idle. */
+        private const val SETTLE_NUDGE_MS = 500L
+
+        /** Hard cap: always send by this point, so the request can never be left unsent while connected. */
+        private const val SETTLE_FALLBACK_MS = 2000L
+    }
+
+    // Link-settle tracking. Some centrals (e.g. Samsung) boost the connection interval to 7.5 ms during
+    // service discovery and step back down as soon as the link goes idle. If the SessionEstablishment is
+    // sent while boosted, that step-down lands right after the send and the link can drop (status=8).
+    // We therefore track the parameters reported by onConnectionUpdated and send once the link has settled.
+    private val linkLock = Any()
+    private var lastConnInterval: Int? = null
+    private var longestConnInterval = 0
+    private var settleListener: ((Int) -> Unit)? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private fun resetLinkTracking() {
+        synchronized(linkLock) {
+            lastConnInterval = null
+            longestConnInterval = 0
+            settleListener = null
+        }
+    }
+
+    private fun requestConfiguredPriority() {
+        try {
+            gattClient?.requestConnectionPriority(CONNECTION_PRIORITY)
+        } catch (error: SecurityException) {
+            callback.onError(error)
+        }
+    }
+
+    /**
+     * Runs [action] once the connection parameters have settled, so no parameter change lands while
+     * the request is in flight. [action] receives an outcome string for logging:
+     *  - "sent-no-updates":     no onConnectionUpdated seen yet; send immediately (previous behaviour)
+     *  - "sent-no-boost":       link is at its resting interval; send immediately
+     *  - "sent-after-stepdown": link was boosted; sent on the step-down event
+     *  - "sent-after-fallback": link was boosted and no step-down arrived within SETTLE_FALLBACK_MS
+     * [action] is invoked exactly once, on the main thread, and always within SETTLE_FALLBACK_MS.
+     */
+    fun runWhenLinkSettled(action: (outcome: String) -> Unit) {
+        val fired = AtomicBoolean(false)
+        val startedAt = SystemClock.elapsedRealtime()
+
+        fun fire(outcome: String) {
+            if (!fired.compareAndSet(false, true)) return
+            synchronized(linkLock) { settleListener = null }
+            reportLog("Link settle: $outcome after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            mainHandler.post { action(outcome) }
+        }
+
+        // Schedule the hard cap first, independent of any Bluetooth callback arriving.
+        mainHandler.postDelayed({ fire("sent-after-fallback") }, SETTLE_FALLBACK_MS)
+
+        synchronized(linkLock) {
+            val current = lastConnInterval
+            val longest = longestConnInterval
+            if (current == null) {
+                reportLog("Link settle: no connection updates seen")
+                fire("sent-no-updates")
+            } else if (current >= longest && current >= BOOSTED_INTERVAL_THRESHOLD) {
+                reportLog("Link settle: not boosted (interval=$current, longest=$longest)")
+                fire("sent-no-boost")
+            } else {
+                reportLog("Link settle: boosted (interval=$current, longest=$longest); waiting for step-down")
+                val boostedInterval: Int = current
+                settleListener = { interval -> if (interval > boostedInterval) fire("sent-after-stepdown") }
+                mainHandler.postDelayed({
+                    if (!fired.get()) {
+                        reportLog("Link settle: no step-down after $SETTLE_NUDGE_MS ms; re-requesting priority")
+                        requestConfiguredPriority()
+                    }
+                }, SETTLE_NUDGE_MS)
+            }
+        }
+    }
+
     /**
      * Bluetooth GATT callback containing all of the events.
      */
@@ -85,12 +179,15 @@ class GattClient(
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 clearCache()
+                resetLinkTracking()
 
                 callback.onState(BleStates.GattClientConnected.string)
                 reportLog("Gatt Client is connected.")
 
                 try {
-                    gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                    // Requesting a priority up front also makes the stack report a resting interval before any
+                    // discovery boost, which runWhenLinkSettled uses as its baseline.
+                    gatt.requestConnectionPriority(CONNECTION_PRIORITY)
                     gatt.discoverServices()
                 } catch (error: SecurityException) {
                     callback.onError(error)
@@ -99,6 +196,24 @@ class GattClient(
                 callback.onPeerDisconnected()
                 reportLog("GATT Server disconnected.")
             }
+        }
+
+        /**
+         * Connection parameters changed. Hidden (@hide) in the public SDK but invoked by the framework
+         * (API 26+). Declared without `override` so it compiles against the public android.jar; the
+         * framework's virtual call dispatches to it at runtime. If a future compileSdk exposes this
+         * method publicly, add the `override` modifier.
+         */
+        @Suppress("unused")
+        fun onConnectionUpdated(gatt: BluetoothGatt, interval: Int, latency: Int, timeout: Int, status: Int) {
+            reportLog("onConnectionUpdated interval=$interval latency=$latency timeout=$timeout status=$status")
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+            val listener = synchronized(linkLock) {
+                lastConnInterval = interval
+                if (interval > longestConnInterval) longestConnInterval = interval
+                settleListener
+            }
+            listener?.invoke(interval)
         }
 
         /**
@@ -901,6 +1016,7 @@ class GattClient(
     }
 
     fun reset() {
+        resetLinkTracking()
         mtu = 0
         writingQueueTotalChunks = 0
         writingQueue.clear()
