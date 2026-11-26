@@ -27,6 +27,9 @@ class TransportBleCentralClientReader(
     private lateinit var gattClient: GattClient
     private lateinit var identValue: ByteArray
 
+    // Set when the peer disconnects, so a pending link-settle send doesn't fire on a dead link.
+    @Volatile private var peerDisconnected = false
+
     private var characteristicStateUuid: UUID =
         UUID.fromString("00000005-a123-48ce-896b-4c76973373e6")
     private var characteristicClient2ServerUuid: UUID =
@@ -87,10 +90,20 @@ class TransportBleCentralClientReader(
                 )
                 callback?.update(mapOf(Pair("connected", "")))
                 //gattClient.sendMessage(byteArrayOf(0x01.toByte()))
-                gattClient.sendMessage(encodedEDeviceKeyBytes)
+                // Send only once the connection parameters have settled, so a central-side step-down
+                // (e.g. Samsung leaving its 7.5 ms discovery boost) can't land while the request is in flight.
+                gattClient.runWhenLinkSettled { outcome ->
+                    if (peerDisconnected) {
+                        Log.d("TransportBleCentralClientReader.settle", "Peer disconnected before link settled ($outcome); not sending")
+                    } else {
+                        Log.d("TransportBleCentralClientReader.settle", "Sending request ($outcome)")
+                        gattClient.sendMessage(encodedEDeviceKeyBytes)
+                    }
+                }
             }
 
             override fun onPeerDisconnected() {
+                peerDisconnected = true
                 Log.d(
                     "TransportBleCentralClientHolder.gattClientCallback.onPeerDisconnected",
                     "Peer Disconnected"
